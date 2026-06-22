@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # --- Stage 1: build the frontend ---
-FROM node:20-alpine AS frontend
+FROM node:26-alpine AS frontend
 WORKDIR /web
 COPY web/package.json web/package-lock.json* ./
 RUN npm install
