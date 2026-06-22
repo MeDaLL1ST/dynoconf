@@ -1,0 +1,82 @@
+# Default values for dynoconf. One release = one contour (dev / prod / prod1),
+# each pointing at its own Postgres.
+
+# Override the generated resource names. Set this (e.g. to "dynoconf") so the
+# in-cluster gRPC address is a clean "dynoconf-grpc:9090" regardless of release
+# name. Each contour lives in its own namespace, so the name can be identical.
+nameOverride: ""
+fullnameOverride: ""
+
+replicaCount: 2
+
+image:
+  repository: ghcr.io/your-org/dynoconf
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+# Contour label shown in the UI.
+contourName: dev
+
+service:
+  http:
+    port: 8080      # UI / REST — expose behind Ingress/VPN
+    type: ClusterIP
+  grpc:
+    port: 9090      # apps — keep cluster-internal, do NOT publish externally
+    type: ClusterIP
+
+# Non-secret configuration.
+config:
+  # Postgres connection string. Prefer providing this via existingSecret.
+  databaseUrl: ""
+  oidcIssuer: "https://gitlab.example.com"
+  oidcClientId: ""
+  oidcRedirectUrl: "https://dynoconf.example.com/auth/callback"
+  bootstrapAdminEmail: "admin@example.com"
+  cookieSecure: "true"
+
+# Secrets. Either set values here (templated into a Secret) or point at an
+# existing Secret that contains DATABASE_URL, SESSION_SECRET, OIDC_CLIENT_SECRET.
+secret:
+  create: true
+  databaseUrl: "postgres://user:pass@postgres:5432/dynoconf?sslmode=require"
+  sessionSecret: "change-me-32-bytes-minimum"
+  oidcClientSecret: ""
+existingSecret: ""
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# UI/REST ingress (behind your VPN). The gRPC Service is intentionally not
+# exposed via Ingress.
+ingress:
+  enabled: false
+  className: ""
+  host: dynoconf.example.com
+  annotations: {}
+  # IP allow-list (CIDRs). When set, only these source ranges may reach the UI —
+  # use this to restrict the UI to your VPN/office ranges. Rendered as the
+  # ingress-nginx `whitelist-source-range` annotation by default; set
+  # whitelistAnnotation to match your controller (e.g. Traefik/HAProxy) if not
+  # using ingress-nginx.
+  whitelistSourceRanges: []
+  # - 10.0.0.0/8
+  # - 192.168.0.0/16
+  whitelistAnnotation: nginx.ingress.kubernetes.io/whitelist-source-range
+  tls: []
+
+probes:
+  liveness:
+    path: /healthz
+  readiness:
+    path: /readyz
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,0 +1,10 @@
+dynoconf ({{ .Values.contourName }}) is deploying.
+
+UI / REST:   https://{{ .Values.ingress.host }}{{ if not .Values.ingress.enabled }}  (ingress disabled — port-forward the http service){{ end }}
+gRPC (apps): {{ include "dynoconf.fullname" . }}-grpc:{{ .Values.service.grpc.port }}  (cluster-internal)
+
+Check rollout:
+  kubectl rollout status deploy/{{ include "dynoconf.fullname" . }} -n {{ .Release.Namespace }}
+
+Apps connect with their service key (from the UI "Connection info" panel) via gRPC.
+Schema migrations run automatically on startup.

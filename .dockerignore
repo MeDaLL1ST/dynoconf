@@ -1,0 +1,7 @@
+.git
+**/node_modules
+web/dist
+/tmp
+*.md
+deploy
+examples/go-client/go.sum

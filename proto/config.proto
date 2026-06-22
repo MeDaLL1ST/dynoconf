@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+package dynoconf.v1;
+
+option go_package = "github.com/dynoconf/dynoconf/internal/grpcserver/configpb;configpb";
+
+// Java options (ignored by the Go generator). The Java reference client in
+// examples/java-client generates its stubs from this same canonical file.
+option java_package = "dynoconf.v1";
+option java_multiple_files = true;
+option java_outer_classname = "ConfigProto";
+
+// ConfigStream is the streaming contract consumed by applications.
+//
+// An application opens a single server-streaming RPC, identifies itself with
+// its service_key, and (optionally) asks for a full snapshot of its current
+// variables. The server then keeps the stream open and pushes incremental
+// changes plus periodic heartbeats until the client disconnects or the server
+// drains on shutdown.
+service ConfigStream {
+  // Subscribe opens the stream. The server first sends a Snapshot (when
+  // send_snapshot=true), then a continuous flow of Change events and
+  // Heartbeats.
+  rpc Subscribe(SubscribeRequest) returns (stream ConfigEvent);
+}
+
+message SubscribeRequest {
+  // service_key identifies the logical service (see the `services` table).
+  string service_key = 1;
+  // send_snapshot asks the server to emit the full current set of variables
+  // before streaming incremental changes. "Ready to accept all initial vars."
+  bool send_snapshot = 2;
+  // client_token is RESERVED for a future per-service auth token. In v1 the
+  // gRPC endpoint is network-restricted and this field is NOT validated.
+  string client_token = 3;
+}
+
+message ConfigEvent {
+  oneof event {
+    Snapshot snapshot = 1;   // all current variables of the service
+    Change change = 2;       // a single incremental change
+    Heartbeat heartbeat = 3; // liveness ping
+  }
+}
+
+message Snapshot {
+  repeated Variable variables = 1;
+}
+
+message Change {
+  enum Type {
+    UPSERT = 0;
+    DELETE = 1;
+  }
+  Type type = 1;
+  Variable variable = 2;
+}
+
+message Variable {
+  string key = 1;
+  string value = 2;
+  int64 version = 3;
+}
+
+message Heartbeat {
+  int64 ts = 1;
+}

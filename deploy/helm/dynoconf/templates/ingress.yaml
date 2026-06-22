@@ -1,0 +1,36 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "dynoconf.fullname" . }}
+  labels:
+    {{- include "dynoconf.labels" . | nindent 4 }}
+  {{- if or .Values.ingress.annotations .Values.ingress.whitelistSourceRanges }}
+  annotations:
+    {{- with .Values.ingress.whitelistSourceRanges }}
+    {{ $.Values.ingress.whitelistAnnotation }}: {{ join "," . | quote }}
+    {{- end }}
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "dynoconf.fullname" . }}-http
+                port:
+                  number: {{ .Values.service.http.port }}
+{{- end }}
