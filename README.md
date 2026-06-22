@@ -204,11 +204,17 @@ numbers are monotonic per `(service, key)` and **survive delete/recreate**.
 
 ## Build & deploy
 
-**Single image** (multi-stage: node builds the frontend → embedded into the Go
-binary → distroless runtime):
+A prebuilt multi-arch image (linux/amd64 + linux/arm64) is published at
+[`medall1st/dynoconf`](https://hub.docker.com/r/medall1st/dynoconf) (tags
+`1.0.0`, `latest`).
+
+**Build it yourself** (multi-stage: node builds the frontend → embedded into the
+Go binary → distroless runtime):
 
 ```bash
-docker build -t dynoconf:latest .
+docker build -t medall1st/dynoconf:1.0.0 .
+# multi-arch:
+docker buildx build --platform linux/amd64,linux/arm64 -t medall1st/dynoconf:1.0.0 --push .
 ```
 
 Migrations run automatically on startup (idempotent), or apply them explicitly:

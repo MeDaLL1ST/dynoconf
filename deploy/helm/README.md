@@ -22,8 +22,8 @@ fullnameOverride: dynoconf   # in-cluster gRPC becomes dynoconf-grpc:9090
 contourName: dev
 replicaCount: 1
 image:
-  repository: ghcr.io/your-org/dynoconf
-  tag: "latest"
+  repository: medall1st/dynoconf
+  tag: "1.0.0"
 ingress:
   enabled: true
   className: nginx

@@ -21,6 +21,9 @@ services:
       retries: 20
 
   dynoconf:
+    image: medall1st/dynoconf:1.0.0
+    # `build: .` builds locally and tags it as the image above. Remove `build`
+    # (or run `docker compose pull`) to use the published Docker Hub image.
     build: .
     depends_on:
       postgres:
