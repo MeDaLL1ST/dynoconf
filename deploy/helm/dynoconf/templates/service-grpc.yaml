@@ -1,0 +1,16 @@
+# gRPC service for applications. ClusterIP only — intentionally NOT exposed
+# outside the cluster. Apps connect to {{ include "dynoconf.fullname" . }}-grpc:{{ .Values.service.grpc.port }}.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dynoconf.fullname" . }}-grpc
+  labels:
+    {{- include "dynoconf.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.grpc.type }}
+  selector:
+    {{- include "dynoconf.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: grpc
+      port: {{ .Values.service.grpc.port }}
+      targetPort: grpc

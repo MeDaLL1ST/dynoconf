@@ -1,0 +1,15 @@
+# UI / REST service. Put this behind an Ingress reachable only over your VPN.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dynoconf.fullname" . }}-http
+  labels:
+    {{- include "dynoconf.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.http.type }}
+  selector:
+    {{- include "dynoconf.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.http.port }}
+      targetPort: http

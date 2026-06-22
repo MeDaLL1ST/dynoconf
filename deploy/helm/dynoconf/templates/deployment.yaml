@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dynoconf.fullname" . }}
+  labels:
+    {{- include "dynoconf.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "dynoconf.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "dynoconf.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      containers:
+        - name: dynoconf
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.http.port }}
+            - name: grpc
+              containerPort: {{ .Values.service.grpc.port }}
+          env:
+            - name: CONTOUR_NAME
+              value: {{ .Values.contourName | quote }}
+            - name: HTTP_ADDR
+              value: ":{{ .Values.service.http.port }}"
+            - name: GRPC_ADDR
+              value: ":{{ .Values.service.grpc.port }}"
+            - name: OIDC_ISSUER
+              value: {{ .Values.config.oidcIssuer | quote }}
+            - name: OIDC_CLIENT_ID
+              value: {{ .Values.config.oidcClientId | quote }}
+            - name: OIDC_REDIRECT_URL
+              value: {{ .Values.config.oidcRedirectUrl | quote }}
+            - name: BOOTSTRAP_ADMIN_EMAIL
+              value: {{ .Values.config.bootstrapAdminEmail | quote }}
+            - name: COOKIE_SECURE
+              value: {{ .Values.config.cookieSecure | quote }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "dynoconf.secretName" . }}
+                  key: DATABASE_URL
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "dynoconf.secretName" . }}
+                  key: SESSION_SECRET
+            - name: OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "dynoconf.secretName" . }}
+                  key: OIDC_CLIENT_SECRET
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.liveness.path }}
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path }}
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

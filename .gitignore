@@ -1,0 +1,23 @@
+# Go
+/tmp/
+*.test
+*.out
+
+# Frontend
+web/node_modules/
+web/*.tsbuildinfo
+web/vite.config.js
+web/vite.config.d.ts
+bin/
+# Built frontend is embedded; the Docker build regenerates it. Keep a
+# placeholder index.html so `go build` works locally without npm.
+web/dist/*
+!web/dist/index.html
+
+# Local env
+.env
+
+# Environment-specific Helm value files (kept local, not published).
+deploy/helm/dev-values.yaml
+deploy/helm/prod-values.yaml
+deploy/helm/prod1-values.yaml
