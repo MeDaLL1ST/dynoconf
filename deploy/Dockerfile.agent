@@ -1,0 +1,16 @@
+# syntax=docker/dockerfile:1
+# Sidecar agent image: connects to dynoconf and renders config to a file.
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS build
+ARG TARGETOS
+ARG TARGETARCH
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    go build -ldflags="-s -w" -o /dynoconf-agent ./cmd/agent
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /dynoconf-agent /dynoconf-agent
+USER nonroot:nonroot
+ENTRYPOINT ["/dynoconf-agent"]

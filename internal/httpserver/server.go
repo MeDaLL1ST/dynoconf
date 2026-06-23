@@ -65,6 +65,21 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/services/{id}/variables", s.handleListVariables)
 	mux.HandleFunc("PUT /api/services/{id}/variables/{key}", s.handlePutVariable)
 	mux.HandleFunc("DELETE /api/services/{id}/variables/{key}", s.handleDeleteVariable)
+	mux.HandleFunc("POST /api/services/{id}/bulk", s.handleBulkUpsert)
+
+	// Service metadata + connection detail + favorites.
+	mux.HandleFunc("PUT /api/services/{id}/tags", s.handleSetTags)
+	mux.HandleFunc("GET /api/services/{id}/clients", s.handleServiceClients)
+	mux.HandleFunc("POST /api/services/{id}/favorite", s.handleAddFavorite)
+	mux.HandleFunc("DELETE /api/services/{id}/favorite", s.handleRemoveFavorite)
+
+	// Cross-service search.
+	mux.HandleFunc("GET /api/search", s.handleSearch)
+
+	// API tokens (CLI / CI).
+	mux.HandleFunc("GET /api/tokens", s.handleListTokens)
+	mux.HandleFunc("POST /api/tokens", s.handleCreateToken)
+	mux.HandleFunc("DELETE /api/tokens/{id}", s.handleDeleteToken)
 
 	// History / rollback.
 	mux.HandleFunc("GET /api/services/{id}/history", s.handleServiceHistory)

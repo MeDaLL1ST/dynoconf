@@ -28,7 +28,9 @@ import (
 	pb "github.com/dynoconf/dynoconf/internal/grpcserver/configpb"
 	"github.com/dynoconf/dynoconf/internal/httpserver"
 	"github.com/dynoconf/dynoconf/internal/migrate"
+	"github.com/dynoconf/dynoconf/internal/notify"
 	"github.com/dynoconf/dynoconf/internal/store"
+	"github.com/dynoconf/dynoconf/internal/tgbot"
 	"github.com/dynoconf/dynoconf/web"
 )
 
@@ -72,7 +74,9 @@ func run(log *slog.Logger) error {
 	}
 	defer st.Close()
 
-	auditor := audit.New(st, log)
+	// Telegram notifications on changes (best-effort; no-op if unconfigured).
+	notifier := notify.NewTelegram(cfg.TelegramBotToken, cfg.TelegramChatID, cfg.ContourName, log)
+	auditor := audit.New(st, log, notifier)
 
 	// Events broker: a dedicated connection for LISTEN.
 	broker := events.NewBroker(func(ctx context.Context) (*pgx.Conn, error) {
@@ -85,6 +89,11 @@ func run(log *slog.Logger) error {
 
 	tracker := grpcserver.NewConnTracker(replicaID, st, broker, log)
 	go tracker.Run(rootCtx)
+
+	// Optional Telegram bot for viewing/editing config from chat.
+	if bot := tgbot.New(cfg.TelegramBotToken, cfg.TelegramAdminIDs, cfg.ContourName, st, broker, auditor, log); bot != nil {
+		go bot.Run(rootCtx)
+	}
 
 	// Cap the audit log so it can't fill the database.
 	go runAuditPruner(rootCtx, st, cfg.AuditMaxEntries, log)

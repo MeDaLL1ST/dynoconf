@@ -201,7 +201,15 @@ numbers are monotonic per `(service, key)` and **survive delete/recreate**.
 | `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` / `OIDC_REDIRECT_URL` | yes* | *unless `DEV_AUTH_EMAIL` is set |
 | `COOKIE_SECURE` | no (`false`) | set `true` behind HTTPS |
 | `AUDIT_MAX_ENTRIES` | no (`5000`) | audit log is pruned hourly to the newest N rows |
+| `TELEGRAM_BOT_TOKEN` | no | enables change notifications (with chat id) and the bot (with admin ids) |
+| `TELEGRAM_CHAT_ID` | no | chat to post change notifications to |
+| `TELEGRAM_ADMIN_IDS` | no | comma-separated Telegram user ids allowed to edit via the bot |
 | `DEV_AUTH_EMAIL` | no | **dev only**: bypass OIDC, log in as this email |
+
+Extras: cross-service **search**, service **tags** + **favorites**, **bulk edit**
+(paste KEY=VALUE), per-client **connection detail** (replica + peer + since),
+**Telegram** notifications/bot, **API tokens** for the `dynoconf-cli`, and a
+language-agnostic **sidecar agent** (`cmd/agent`) that renders config to a file.
 
 Login sessions are persistent encrypted cookies (30 days), so reopening a
 tab/browser keeps you signed in. The audit log is capped by `AUDIT_MAX_ENTRIES`
@@ -219,9 +227,9 @@ A prebuilt multi-arch image (linux/amd64 + linux/arm64) is published at
 Go binary → distroless runtime):
 
 ```bash
-docker build -t medall1st/dynoconf:1.1.0 .
+docker build -t medall1st/dynoconf:1.2.0 .
 # multi-arch:
-docker buildx build --platform linux/amd64,linux/arm64 -t medall1st/dynoconf:1.1.0 --push .
+docker buildx build --platform linux/amd64,linux/arm64 -t medall1st/dynoconf:1.2.0 --push .
 ```
 
 Migrations run automatically on startup (idempotent), or apply them explicitly:

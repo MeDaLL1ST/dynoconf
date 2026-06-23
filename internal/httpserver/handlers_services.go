@@ -20,6 +20,7 @@ type serviceDTO struct {
 	store.Service
 	ActiveConnections int    `json:"active_connections"`
 	AccessLevel       string `json:"access_level"`
+	IsFavorite        bool   `json:"is_favorite"`
 }
 
 func (s *Server) handleListServices(w http.ResponseWriter, r *http.Request) {
@@ -46,11 +47,22 @@ func (s *Server) handleListServices(w http.ResponseWriter, r *http.Request) {
 		s.log.Warn("active connections lookup failed", "err", err)
 		counts = map[int64]int{}
 	}
+	favs := map[int64]bool{}
+	if ids, err := s.store.ListFavorites(r.Context(), u.ID); err == nil {
+		for _, id := range ids {
+			favs[id] = true
+		}
+	}
 
 	out := make([]serviceDTO, 0, len(services))
 	for _, svc := range services {
 		level, _ := s.effectiveLevel(r.Context(), u, svc.ID)
-		out = append(out, serviceDTO{Service: svc, ActiveConnections: counts[svc.ID], AccessLevel: level})
+		out = append(out, serviceDTO{
+			Service:           svc,
+			ActiveConnections: counts[svc.ID],
+			AccessLevel:       level,
+			IsFavorite:        favs[svc.ID],
+		})
 	}
 	writeJSON(w, http.StatusOK, out)
 }

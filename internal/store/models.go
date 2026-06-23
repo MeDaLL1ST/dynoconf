@@ -39,8 +39,27 @@ type Service struct {
 	Key         string    `json:"key"`
 	Name        string    `json:"name"`
 	Description string    `json:"description"`
+	Tags        []string  `json:"tags"`
 	CreatedAt   time.Time `json:"created_at"`
 	CreatedBy   string    `json:"created_by"`
+}
+
+// ConnectionClient is one live gRPC stream, for the connection-detail view.
+type ConnectionClient struct {
+	ServiceID   int64     `json:"service_id"`
+	ReplicaID   string    `json:"replica_id"`
+	ConnID      string    `json:"conn_id"`
+	PeerAddr    string    `json:"peer_addr"`
+	ConnectedAt time.Time `json:"connected_at"`
+}
+
+// APIToken is a personal token for the CLI / CI (REST bearer auth).
+type APIToken struct {
+	ID         int64      `json:"id"`
+	UserID     int64      `json:"user_id"`
+	Name       string     `json:"name"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 }
 
 // Variable is the current value of a configuration key for a service.

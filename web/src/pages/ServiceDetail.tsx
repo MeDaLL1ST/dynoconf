@@ -10,10 +10,13 @@ import {
   Plug,
   ArrowLeft,
   Pencil,
+  Users,
+  ClipboardPaste,
 } from "lucide-react";
 import {
   api,
   ApiError,
+  type ConnectionClient,
   type Me,
   type Service,
   type Variable,
@@ -30,6 +33,7 @@ import {
   Input,
   LoadingState,
 } from "@/components/ui";
+import { Modal } from "@/components/Modal";
 import { ConnBadge } from "./Services";
 import { HistoryModal } from "./HistoryModal";
 import { ConnectionInfoModal } from "./ConnectionInfoModal";
@@ -51,6 +55,8 @@ export function ServiceDetail({ me }: { me: Me }) {
 
   const [historyKey, setHistoryKey] = useState<string | null>(null);
   const [showConn, setShowConn] = useState(false);
+  const [showClients, setShowClients] = useState(false);
+  const [showBulk, setShowBulk] = useState(false);
 
   useEventStream({
     onVariable: (e) => {
@@ -96,9 +102,18 @@ export function ServiceDetail({ me }: { me: Me }) {
           {svc.description && (
             <p className="max-w-2xl text-sm text-muted-foreground">{svc.description}</p>
           )}
+          <TagsEditor svc={svc} canEdit={canEdit} />
         </div>
         <div className="flex items-center gap-2">
           {!canEdit && <Badge variant="outline">read-only</Badge>}
+          <Button variant="outline" onClick={() => setShowClients(true)}>
+            <Users className="h-4 w-4" /> Clients ({svc.active_connections})
+          </Button>
+          {canEdit && (
+            <Button variant="outline" onClick={() => setShowBulk(true)}>
+              <ClipboardPaste className="h-4 w-4" /> Bulk edit
+            </Button>
+          )}
           <Button variant="outline" onClick={() => setShowConn(true)}>
             <Plug className="h-4 w-4" /> Connection info
           </Button>
@@ -172,8 +187,174 @@ export function ServiceDetail({ me }: { me: Me }) {
       {showConn && (
         <ConnectionInfoModal serviceId={serviceId} onClose={() => setShowConn(false)} />
       )}
+      {showClients && (
+        <ClientsModal serviceId={serviceId} onClose={() => setShowClients(false)} />
+      )}
+      {showBulk && (
+        <BulkEditModal serviceId={serviceId} onClose={() => setShowBulk(false)} />
+      )}
     </div>
   );
+}
+
+function TagsEditor({ svc, canEdit }: { svc: Service; canEdit: boolean }) {
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState((svc.tags ?? []).join(", "));
+  const save = useMutation({
+    mutationFn: () =>
+      api.setTags(
+        svc.id,
+        text.split(",").map((t) => t.trim()).filter(Boolean)
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["service", svc.id] });
+      qc.invalidateQueries({ queryKey: ["services"] });
+      setEditing(false);
+    },
+  });
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1.5 pt-1">
+        <Input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="tag1, tag2"
+          className="h-8 w-64"
+          autoFocus
+        />
+        <Button size="icon" className="h-8 w-8" onClick={() => save.mutate()}>
+          <Check className="h-4 w-4" />
+        </Button>
+        <Button size="icon" variant="outline" className="h-8 w-8" onClick={() => setEditing(false)}>
+          <X className="h-4 w-4" />
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-1 pt-1">
+      {(svc.tags ?? []).map((t) => (
+        <Badge key={t} variant="secondary">
+          {t}
+        </Badge>
+      ))}
+      {canEdit && (
+        <button
+          onClick={() => {
+            setText((svc.tags ?? []).join(", "));
+            setEditing(true);
+          }}
+          className="text-xs text-muted-foreground hover:text-foreground"
+        >
+          <Pencil className="inline h-3 w-3" /> tags
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ClientsModal({ serviceId, onClose }: { serviceId: number; onClose: () => void }) {
+  const clients = useQuery<ConnectionClient[], ApiError>({
+    queryKey: ["clients", serviceId],
+    queryFn: () => api.serviceClients(serviceId),
+    refetchInterval: 5000,
+  });
+  const byReplica: Record<string, ConnectionClient[]> = {};
+  (clients.data ?? []).forEach((c) => {
+    (byReplica[c.replica_id] ||= []).push(c);
+  });
+  return (
+    <Modal open onClose={onClose} title="Active gRPC clients">
+      {clients.isLoading && <LoadingState />}
+      {clients.error && <ErrorState message={clients.error.message} />}
+      {clients.data && clients.data.length === 0 && (
+        <p className="text-sm text-muted-foreground">No active connections.</p>
+      )}
+      <div className="space-y-4">
+        {Object.entries(byReplica).map(([replica, list]) => (
+          <div key={replica}>
+            <div className="mb-1 text-xs font-medium text-muted-foreground">
+              replica <code>{replica}</code> · {list.length} connection(s)
+            </div>
+            <ul className="space-y-1">
+              {list.map((c) => (
+                <li key={c.conn_id} className="flex justify-between rounded-md border border-border px-3 py-1.5 text-xs">
+                  <span className="font-mono">{c.peer_addr}</span>
+                  <span className="text-muted-foreground" title={formatTime(c.connected_at)}>
+                    since {relativeTime(c.connected_at)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
+function BulkEditModal({ serviceId, onClose }: { serviceId: number; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [text, setText] = useState("");
+  const apply = useMutation({
+    mutationFn: () => api.bulkUpsert(serviceId, parseEnv(text)),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["variables", serviceId] });
+      onClose();
+    },
+  });
+  const parsed = parseEnv(text);
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Bulk edit (paste KEY=VALUE lines)"
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            onClick={() => apply.mutate()}
+            disabled={Object.keys(parsed).length === 0 || apply.isPending}
+          >
+            Apply {Object.keys(parsed).length} variable(s)
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-2">
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder={"DB_HOST=db1\nLOG_LEVEL=info\n# lines starting with # are ignored"}
+          className="h-48 w-full rounded-md border border-input bg-background p-3 font-mono text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        />
+        <p className="text-xs text-muted-foreground">
+          Applied in a single transaction; each is versioned. Existing variables not
+          listed are left untouched.
+        </p>
+        {apply.error && <ErrorState message={(apply.error as ApiError).message} />}
+      </div>
+    </Modal>
+  );
+}
+
+function parseEnv(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    let val = line.slice(eq + 1).trim();
+    if (val.length >= 2 && val.startsWith('"') && val.endsWith('"')) {
+      val = val.slice(1, -1);
+    }
+    out[line.slice(0, eq).trim()] = val;
+  }
+  return out;
 }
 
 function VariableRow({

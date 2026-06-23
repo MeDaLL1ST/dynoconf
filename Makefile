@@ -6,6 +6,10 @@ help: ## Show this help
 build: ## Build the server binary (embeds web/dist)
 	go build -o bin/dynoconf ./cmd/server
 
+build-tools: ## Build the sidecar agent and CLI
+	go build -o bin/dynoconf-agent ./cmd/agent
+	go build -o bin/dynoconf-cli ./cmd/cli
+
 test: ## Run all tests (DB-backed tests use Docker/testcontainers)
 	go test ./...
 

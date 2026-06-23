@@ -99,6 +99,55 @@ func (s *Store) UpsertVariable(ctx context.Context, serviceID int64, key, value,
 	return &VarChange{Variable: v, ChangeType: changeType}, nil
 }
 
+// BulkUpsertVariables creates/updates several variables in a single
+// transaction, each versioned and history-logged. Returns one VarChange per
+// applied variable (in input order is not guaranteed; map iteration).
+func (s *Store) BulkUpsertVariables(ctx context.Context, serviceID int64, kv map[string]string, by string) ([]VarChange, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	out := make([]VarChange, 0, len(kv))
+	for key, value := range kv {
+		var existed bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM variables WHERE service_id=$1 AND key=$2)`,
+			serviceID, key).Scan(&existed); err != nil {
+			return nil, err
+		}
+		ver, err := nextVersion(ctx, tx, serviceID, key)
+		if err != nil {
+			return nil, err
+		}
+		changeType := ChangeCreate
+		if existed {
+			changeType = ChangeUpdate
+		}
+		var v Variable
+		err = tx.QueryRow(ctx,
+			`INSERT INTO variables (service_id, key, value, version, updated_by)
+			 VALUES ($1, $2, $3, $4, $5)
+			 ON CONFLICT (service_id, key)
+			 DO UPDATE SET value = EXCLUDED.value, version = EXCLUDED.version,
+			               updated_at = now(), updated_by = EXCLUDED.updated_by
+			 RETURNING id, service_id, key, value, version, updated_at, updated_by`,
+			serviceID, key, value, ver, by,
+		).Scan(&v.ID, &v.ServiceID, &v.Key, &v.Value, &v.Version, &v.UpdatedAt, &v.UpdatedBy)
+		if err != nil {
+			return nil, err
+		}
+		if err := insertVersion(ctx, tx, serviceID, key, value, ver, changeType, by); err != nil {
+			return nil, err
+		}
+		out = append(out, VarChange{Variable: v, ChangeType: changeType})
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DeleteVariable removes a variable and records a delete history row. The
 // returned VarChange carries the version number assigned to the delete event.
 func (s *Store) DeleteVariable(ctx context.Context, serviceID int64, key, by string) (*VarChange, error) {

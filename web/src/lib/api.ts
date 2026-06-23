@@ -14,10 +14,35 @@ export interface Service {
   key: string;
   name: string;
   description: string;
+  tags: string[];
   created_at: string;
   created_by: string;
   active_connections: number;
   access_level: "viewer" | "editor" | "";
+  is_favorite: boolean;
+}
+
+export interface SearchHit {
+  service_id: number;
+  service_key: string;
+  service_name: string;
+  key: string;
+  value: string;
+}
+
+export interface ConnectionClient {
+  service_id: number;
+  replica_id: string;
+  conn_id: string;
+  peer_addr: string;
+  connected_at: string;
+}
+
+export interface ApiToken {
+  id: number;
+  name: string;
+  created_at: string;
+  last_used_at?: string | null;
 }
 
 export interface Variable {
@@ -141,6 +166,25 @@ export const api = {
     ),
 
   audit: () => req<AuditEntry[]>("GET", "/api/audit"),
+
+  search: (q: string) => req<SearchHit[]>("GET", `/api/search?q=${encodeURIComponent(q)}`),
+  setTags: (id: number, tags: string[]) =>
+    req<void>("PUT", `/api/services/${id}/tags`, { tags }),
+  serviceClients: (id: number) =>
+    req<ConnectionClient[]>("GET", `/api/services/${id}/clients`),
+  bulkUpsert: (id: number, variables: Record<string, string>) =>
+    req<{ applied: number }>("POST", `/api/services/${id}/bulk`, { variables }),
+  addFavorite: (id: number) => req<void>("POST", `/api/services/${id}/favorite`),
+  removeFavorite: (id: number) => req<void>("DELETE", `/api/services/${id}/favorite`),
+
+  listTokens: () => req<ApiToken[]>("GET", "/api/tokens"),
+  createToken: (name: string) =>
+    req<{ id: number; name: string; token: string; created_at: string }>(
+      "POST",
+      "/api/tokens",
+      { name }
+    ),
+  deleteToken: (id: number) => req<void>("DELETE", `/api/tokens/${id}`),
 
   // Export is a direct download (GET /api/export). Import posts a raw JSON doc.
   importConfig: async (jsonText: string) => {

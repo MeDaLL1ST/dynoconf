@@ -3,7 +3,9 @@ package auth
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -80,13 +82,27 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s, ok := a.codec.read(r); ok {
 			if u, err := a.store.GetUser(r.Context(), s.UserID); err == nil {
-				ctx := context.WithValue(r.Context(), userKey, u)
-				next.ServeHTTP(w, r.WithContext(ctx))
+				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey, u)))
+				return
+			}
+		}
+		// API-token bearer auth (CLI / CI).
+		if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+			tok := strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
+			if u, err := a.store.UserByAPIToken(r.Context(), HashAPIToken(tok)); err == nil {
+				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey, u)))
 				return
 			}
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// HashAPIToken returns the storage hash of an API token. Only the hash is
+// persisted; the plaintext is shown to the user once at creation.
+func HashAPIToken(token string) string {
+	sum := sha256.Sum256([]byte("apitoken:" + token))
+	return hex.EncodeToString(sum[:])
 }
 
 // LoginHandler starts the login flow. In dev mode it signs the user in

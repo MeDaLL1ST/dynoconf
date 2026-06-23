@@ -1,9 +1,10 @@
 import { useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Trash2, UserPlus, Download, Upload } from "lucide-react";
+import { Trash2, UserPlus, Download, Upload, KeyRound, Copy } from "lucide-react";
 import {
   api,
   ApiError,
+  type ApiToken,
   type Me,
   type Permission,
   type Service,
@@ -19,6 +20,7 @@ import {
   Input,
   LoadingState,
 } from "@/components/ui";
+import { formatTime } from "@/lib/utils";
 
 export function Admin({ me }: { me: Me }) {
   return (
@@ -32,7 +34,88 @@ export function Admin({ me }: { me: Me }) {
       <Users me={me} />
       <ServiceAccess />
       <ConfigTransfer />
+      <ApiTokens />
     </div>
+  );
+}
+
+function ApiTokens() {
+  const qc = useQueryClient();
+  const tokens = useQuery<ApiToken[], ApiError>({ queryKey: ["tokens"], queryFn: api.listTokens });
+  const [name, setName] = useState("");
+  const [created, setCreated] = useState<string | null>(null);
+
+  const create = useMutation({
+    mutationFn: () => api.createToken(name),
+    onSuccess: (r) => {
+      setCreated(r.token);
+      setName("");
+      qc.invalidateQueries({ queryKey: ["tokens"] });
+    },
+  });
+  const del = useMutation({
+    mutationFn: (id: number) => api.deleteToken(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["tokens"] }),
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <h2 className="text-lg font-semibold">API tokens (CLI / CI)</h2>
+        <p className="text-sm text-muted-foreground">
+          Personal tokens for <code>dynoconf-cli</code> and CI. A token inherits your
+          access. Shown once at creation — store it safely.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {created && (
+          <div className="space-y-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 p-3">
+            <div className="text-sm font-medium text-emerald-500">New token (copy now):</div>
+            <div className="flex items-center gap-2">
+              <code className="break-all text-xs">{created}</code>
+              <Button size="sm" variant="ghost" onClick={() => navigator.clipboard.writeText(created)}>
+                <Copy className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
+        )}
+        <div className="flex items-end gap-2">
+          <label className="flex-1 space-y-1.5">
+            <span className="text-sm font-medium">Token name</span>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="ci-pipeline" />
+          </label>
+          <Button onClick={() => create.mutate()} disabled={!name || create.isPending}>
+            <KeyRound className="h-4 w-4" /> Create
+          </Button>
+        </div>
+        {create.error && <ErrorState message={(create.error as ApiError).message} />}
+
+        {tokens.data && tokens.data.length > 0 && (
+          <table className="w-full text-sm">
+            <tbody>
+              {tokens.data.map((t) => (
+                <tr key={t.id} className="border-b border-border/60 last:border-0">
+                  <td className="py-2.5">{t.name}</td>
+                  <td className="py-2.5 text-xs text-muted-foreground">
+                    {t.last_used_at ? "last used " + formatTime(t.last_used_at) : "never used"}
+                  </td>
+                  <td className="py-2.5 text-right">
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-8 w-8 text-destructive"
+                      onClick={() => del.mutate(t.id)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

@@ -5,17 +5,26 @@ package grpcserver
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"log/slog"
 	"time"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
 	"github.com/dynoconf/dynoconf/internal/events"
 	pb "github.com/dynoconf/dynoconf/internal/grpcserver/configpb"
 	"github.com/dynoconf/dynoconf/internal/store"
 )
+
+func newConnID() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
 
 // heartbeatEvery is how often a Heartbeat is pushed when idle.
 const heartbeatEvery = 15 * time.Second
@@ -60,8 +69,13 @@ func (s *Server) Subscribe(req *pb.SubscribeRequest, stream pb.ConfigStream_Subs
 	evCh, unsubscribe := s.broker.Subscribe(svc.ID)
 	defer unsubscribe()
 
-	s.tracker.Inc(svc.ID)
-	defer s.tracker.Dec(svc.ID)
+	connID := newConnID()
+	peerAddr := "unknown"
+	if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
+		peerAddr = p.Addr.String()
+	}
+	s.tracker.Register(svc.ID, connID, peerAddr)
+	defer s.tracker.Unregister(svc.ID, connID)
 
 	s.log.Info("stream opened", "service", svc.Key, "send_snapshot", req.GetSendSnapshot())
 
