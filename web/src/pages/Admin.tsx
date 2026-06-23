@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Trash2, UserPlus } from "lucide-react";
+import { Trash2, UserPlus, Download, Upload } from "lucide-react";
 import {
   api,
   ApiError,
@@ -31,7 +31,74 @@ export function Admin({ me }: { me: Me }) {
       </div>
       <Users me={me} />
       <ServiceAccess />
+      <ConfigTransfer />
     </div>
+  );
+}
+
+function ConfigTransfer() {
+  const qc = useQueryClient();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [result, setResult] = useState<string | null>(null);
+
+  const importMut = useMutation({
+    mutationFn: (text: string) => api.importConfig(text),
+    onSuccess: (r) => {
+      setResult(
+        `Imported: ${r.variables_imported} variables, ${r.services_created} new service(s), ${r.services_existing} existing.`
+      );
+      qc.invalidateQueries({ queryKey: ["services"] });
+    },
+  });
+
+  const onFile = async (file: File) => {
+    setResult(null);
+    const text = await file.text();
+    importMut.mutate(text);
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <h2 className="text-lg font-semibold">Export / import configuration</h2>
+        <p className="text-sm text-muted-foreground">
+          Download every service and its current variables as JSON, then import it
+          on another contour. Import is a merge: it creates missing services and
+          upserts variables (versioned and audited); it never deletes.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Direct download — browser handles it via Content-Disposition. */}
+          <a
+            href="/api/export"
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-secondary px-4 text-sm font-medium text-secondary-foreground hover:opacity-80"
+          >
+            <Download className="h-4 w-4" /> Export JSON
+          </a>
+          <Button onClick={() => fileRef.current?.click()} disabled={importMut.isPending}>
+            <Upload className="h-4 w-4" /> {importMut.isPending ? "Importing…" : "Import JSON"}
+          </Button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) onFile(f);
+              e.target.value = "";
+            }}
+          />
+        </div>
+        {importMut.error && <ErrorState message={(importMut.error as ApiError).message} />}
+        {result && (
+          <div className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-500">
+            {result}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

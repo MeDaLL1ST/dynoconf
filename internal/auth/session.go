@@ -13,6 +13,10 @@ import (
 
 const sessionCookie = "dynoconf_session"
 
+// sessionTTL is how long a login persists. Set as a persistent cookie (both
+// Max-Age and Expires) so reopening a tab/browser keeps the user signed in.
+const sessionTTL = 30 * 24 * time.Hour
+
 // Session is the data stored in the encrypted cookie.
 type Session struct {
 	UserID int64  `json:"uid"`
@@ -33,7 +37,7 @@ func newCodec(secret string, secure bool) *codec {
 	h := sha256.Sum256([]byte("hash:" + secret))
 	b := sha256.Sum256([]byte("block:" + secret))
 	sc := securecookie.New(h[:], b[:])
-	sc.MaxAge(int((7 * 24 * time.Hour).Seconds()))
+	sc.MaxAge(int(sessionTTL.Seconds()))
 	return &codec{sc: sc, secure: secure}
 }
 
@@ -49,7 +53,10 @@ func (c *codec) write(w http.ResponseWriter, s *Session) error {
 		HttpOnly: true,
 		Secure:   c.secure,
 		SameSite: http.SameSiteLaxMode,
-		Expires:  time.Now().Add(7 * 24 * time.Hour),
+		// Persistent cookie: both Max-Age and Expires so the session survives
+		// tab/browser reopen.
+		MaxAge:  int(sessionTTL.Seconds()),
+		Expires: time.Now().Add(sessionTTL),
 	})
 	return nil
 }

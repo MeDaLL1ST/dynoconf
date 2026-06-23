@@ -86,6 +86,9 @@ func run(log *slog.Logger) error {
 	tracker := grpcserver.NewConnTracker(replicaID, st, broker, log)
 	go tracker.Run(rootCtx)
 
+	// Cap the audit log so it can't fill the database.
+	go runAuditPruner(rootCtx, st, cfg.AuditMaxEntries, log)
+
 	authn, err := auth.New(rootCtx, cfg, st, log)
 	if err != nil {
 		return err
@@ -158,6 +161,34 @@ func run(log *slog.Logger) error {
 
 	log.Info("stopped")
 	return nil
+}
+
+// runAuditPruner periodically trims the audit log to the newest `keep` rows so
+// it can't grow without bound. Runs once at startup, then hourly.
+func runAuditPruner(ctx context.Context, st *store.Store, keep int, log *slog.Logger) {
+	if keep <= 0 {
+		return
+	}
+	prune := func() {
+		c, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		if n, err := st.PruneAudit(c, keep); err != nil {
+			log.Warn("audit prune failed", "err", err)
+		} else if n > 0 {
+			log.Info("audit log pruned", "removed", n, "kept", keep)
+		}
+	}
+	prune()
+	t := time.NewTicker(time.Hour)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			prune()
+		}
+	}
 }
 
 func makeReplicaID() string {

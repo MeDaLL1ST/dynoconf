@@ -20,6 +20,24 @@ func (s *Store) InsertAudit(ctx context.Context, actor, action, target string, d
 	return err
 }
 
+// PruneAudit keeps only the newest `keep` audit entries, deleting older ones.
+// Returns the number of rows removed. Called periodically so the audit log
+// can't grow without bound.
+func (s *Store) PruneAudit(ctx context.Context, keep int) (int64, error) {
+	if keep <= 0 {
+		return 0, nil
+	}
+	ct, err := s.Pool.Exec(ctx,
+		`DELETE FROM audit_log
+		 WHERE id < (SELECT MIN(id) FROM (
+		     SELECT id FROM audit_log ORDER BY id DESC LIMIT $1
+		 ) t)`, keep)
+	if err != nil {
+		return 0, err
+	}
+	return ct.RowsAffected(), nil
+}
+
 // ListAudit returns recent audit entries, newest first.
 func (s *Store) ListAudit(ctx context.Context, limit int) ([]AuditEntry, error) {
 	if limit <= 0 || limit > 1000 {

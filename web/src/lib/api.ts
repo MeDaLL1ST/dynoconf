@@ -142,6 +142,31 @@ export const api = {
 
   audit: () => req<AuditEntry[]>("GET", "/api/audit"),
 
+  // Export is a direct download (GET /api/export). Import posts a raw JSON doc.
+  importConfig: async (jsonText: string) => {
+    const res = await fetch("/api/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: jsonText,
+      credentials: "same-origin",
+    });
+    if (!res.ok) {
+      let msg = res.statusText;
+      try {
+        const j = await res.json();
+        if (j.error) msg = j.error;
+      } catch {
+        /* ignore */
+      }
+      throw new ApiError(res.status, msg);
+    }
+    return res.json() as Promise<{
+      services_created: number;
+      services_existing: number;
+      variables_imported: number;
+    }>;
+  },
+
   listUsers: () => req<User[]>("GET", "/api/users"),
   setUserRole: (id: number, role: "admin" | "user") =>
     req<void>("PUT", `/api/users/${id}/role`, { role }),

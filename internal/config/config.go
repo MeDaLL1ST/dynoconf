@@ -6,6 +6,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -25,6 +26,10 @@ type Config struct {
 	SessionSecret  string
 	BootstrapAdmin string
 	CookieSecure   bool
+
+	// AuditMaxEntries caps the audit_log table; older rows are pruned
+	// periodically so it can't fill the database.
+	AuditMaxEntries int
 
 	// DevAuthEmail, when set, enables a local development login that bypasses
 	// OIDC entirely and signs the request in as this email (provisioned as a
@@ -48,6 +53,7 @@ func Load() (*Config, error) {
 		BootstrapAdmin:   strings.ToLower(strings.TrimSpace(os.Getenv("BOOTSTRAP_ADMIN_EMAIL"))),
 		CookieSecure:     getDefault("COOKIE_SECURE", "false") == "true",
 		DevAuthEmail:     strings.ToLower(strings.TrimSpace(os.Getenv("DEV_AUTH_EMAIL"))),
+		AuditMaxEntries:  getDefaultInt("AUDIT_MAX_ENTRIES", 5000),
 	}
 
 	if c.DatabaseURL == "" {
@@ -77,6 +83,15 @@ func Load() (*Config, error) {
 func getDefault(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return def
+}
+
+func getDefaultInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			return n
+		}
 	}
 	return def
 }

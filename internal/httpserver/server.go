@@ -74,6 +74,10 @@ func (s *Server) Handler() http.Handler {
 	// Audit.
 	mux.HandleFunc("GET /api/audit", s.handleAudit)
 
+	// Export / import the whole config (cross-contour migration).
+	mux.HandleFunc("GET /api/export", s.handleExport)
+	mux.HandleFunc("POST /api/import", s.handleImport)
+
 	// Admin: users & permissions.
 	mux.HandleFunc("GET /api/users", s.handleListUsers)
 	mux.HandleFunc("PUT /api/users/{id}/role", s.handleSetUserRole)
