@@ -1,6 +1,6 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Trash2, UserPlus, Download, Upload, KeyRound, Copy } from "lucide-react";
+import { Trash2, UserPlus, Download, Upload, KeyRound, Copy, Send } from "lucide-react";
 import {
   api,
   ApiError,
@@ -33,9 +33,110 @@ export function Admin({ me }: { me: Me }) {
       </div>
       <Users me={me} />
       <ServiceAccess />
+      <TelegramSettings />
       <ConfigTransfer />
       <ApiTokens />
     </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="block space-y-1.5">
+      <span className="text-sm font-medium">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function TelegramSettings() {
+  const qc = useQueryClient();
+  const cfg = useQuery({ queryKey: ["telegram"], queryFn: api.getTelegram });
+
+  const [enabled, setEnabled] = useState(false);
+  const [token, setToken] = useState("");
+  const [chatId, setChatId] = useState("");
+  const [adminIds, setAdminIds] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  // Seed local form once from server.
+  if (cfg.data && !loaded) {
+    setEnabled(cfg.data.enabled);
+    setChatId(cfg.data.chat_id);
+    setAdminIds((cfg.data.admin_ids ?? []).join(", "));
+    setLoaded(true);
+  }
+
+  const ids = () =>
+    adminIds
+      .split(",")
+      .map((x) => parseInt(x.trim(), 10))
+      .filter((n) => !Number.isNaN(n));
+
+  const save = useMutation({
+    mutationFn: () =>
+      api.setTelegram({ enabled, bot_token: token, chat_id: chatId, admin_ids: ids() }),
+    onSuccess: () => {
+      setToken("");
+      setNote("Saved.");
+      qc.invalidateQueries({ queryKey: ["telegram"] });
+    },
+  });
+  const test = useMutation({
+    mutationFn: () => api.testTelegram({ bot_token: token, chat_id: chatId }),
+    onSuccess: () => setNote("Test message sent."),
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Telegram integration</h2>
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={enabled}
+              onChange={(e) => setEnabled(e.target.checked)}
+              className="h-4 w-4"
+            />
+            {enabled ? "Enabled" : "Disabled"}
+          </label>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Optional. Posts change notifications to a chat and runs a bot that
+          allow-listed users can use to view/edit config. All settings are stored
+          in the database. Untick “Enabled” and save to turn it off completely.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <Field label={`Bot token${cfg.data?.has_token ? " (leave blank to keep current)" : ""}`}>
+          <Input
+            type="password"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder={cfg.data?.has_token ? "•••••••• (unchanged)" : "123456:ABC-DEF…"}
+          />
+        </Field>
+        <Field label="Chat ID (for notifications)">
+          <Input value={chatId} onChange={(e) => setChatId(e.target.value)} placeholder="-1001234567890" />
+        </Field>
+        <Field label="Bot admin Telegram user IDs (comma-separated, may edit via bot)">
+          <Input value={adminIds} onChange={(e) => setAdminIds(e.target.value)} placeholder="111111111, 222222222" />
+        </Field>
+        {save.error && <ErrorState message={(save.error as ApiError).message} />}
+        {test.error && <ErrorState message={(test.error as ApiError).message} />}
+        {note && <div className="text-sm text-emerald-500">{note}</div>}
+        <div className="flex gap-2">
+          <Button onClick={() => save.mutate()} disabled={save.isPending}>
+            Save
+          </Button>
+          <Button variant="outline" onClick={() => test.mutate()} disabled={test.isPending}>
+            <Send className="h-4 w-4" /> Send test
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

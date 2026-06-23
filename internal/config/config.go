@@ -31,11 +31,6 @@ type Config struct {
 	// periodically so it can't fill the database.
 	AuditMaxEntries int
 
-	// Telegram integration (all optional).
-	TelegramBotToken string  // bot token; enables notifications and (with admins) the bot
-	TelegramChatID   string  // chat to post change notifications to
-	TelegramAdminIDs []int64 // Telegram user IDs allowed to edit via the bot
-
 	// DevAuthEmail, when set, enables a local development login that bypasses
 	// OIDC entirely and signs the request in as this email (provisioned as a
 	// normal user, or admin if it matches BootstrapAdmin). NEVER set this in
@@ -59,9 +54,6 @@ func Load() (*Config, error) {
 		CookieSecure:     getDefault("COOKIE_SECURE", "false") == "true",
 		DevAuthEmail:     strings.ToLower(strings.TrimSpace(os.Getenv("DEV_AUTH_EMAIL"))),
 		AuditMaxEntries:  getDefaultInt("AUDIT_MAX_ENTRIES", 5000),
-		TelegramBotToken: strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")),
-		TelegramChatID:   strings.TrimSpace(os.Getenv("TELEGRAM_CHAT_ID")),
-		TelegramAdminIDs: parseInt64List(os.Getenv("TELEGRAM_ADMIN_IDS")),
 	}
 
 	if c.DatabaseURL == "" {
@@ -93,20 +85,6 @@ func getDefault(key, def string) string {
 		return v
 	}
 	return def
-}
-
-func parseInt64List(s string) []int64 {
-	var out []int64
-	for _, part := range strings.Split(s, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		if n, err := strconv.ParseInt(part, 10, 64); err == nil {
-			out = append(out, n)
-		}
-	}
-	return out
 }
 
 func getDefaultInt(key string, def int) int {

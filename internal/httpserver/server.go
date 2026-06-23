@@ -18,6 +18,7 @@ import (
 	"github.com/dynoconf/dynoconf/internal/config"
 	"github.com/dynoconf/dynoconf/internal/events"
 	"github.com/dynoconf/dynoconf/internal/store"
+	"github.com/dynoconf/dynoconf/internal/tgbot"
 )
 
 // Server holds dependencies for the HTTP layer.
@@ -27,13 +28,14 @@ type Server struct {
 	auth     *auth.Authenticator
 	broker   *events.Broker
 	audit    *audit.Logger
+	tg       *tgbot.Manager
 	log      *slog.Logger
 	staticFS fs.FS
 }
 
 // New constructs the HTTP server.
-func New(cfg *config.Config, st *store.Store, a *auth.Authenticator, broker *events.Broker, au *audit.Logger, staticFS fs.FS, log *slog.Logger) *Server {
-	return &Server{cfg: cfg, store: st, auth: a, broker: broker, audit: au, staticFS: staticFS, log: log}
+func New(cfg *config.Config, st *store.Store, a *auth.Authenticator, broker *events.Broker, au *audit.Logger, tg *tgbot.Manager, staticFS fs.FS, log *slog.Logger) *Server {
+	return &Server{cfg: cfg, store: st, auth: a, broker: broker, audit: au, tg: tg, staticFS: staticFS, log: log}
 }
 
 // Handler builds the root http.Handler with all routes wired.
@@ -80,6 +82,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/tokens", s.handleListTokens)
 	mux.HandleFunc("POST /api/tokens", s.handleCreateToken)
 	mux.HandleFunc("DELETE /api/tokens/{id}", s.handleDeleteToken)
+
+	// Telegram integration settings (admin), managed from the UI.
+	mux.HandleFunc("GET /api/settings/telegram", s.handleGetTelegram)
+	mux.HandleFunc("PUT /api/settings/telegram", s.handleSetTelegram)
+	mux.HandleFunc("POST /api/settings/telegram/test", s.handleTestTelegram)
 
 	// History / rollback.
 	mux.HandleFunc("GET /api/services/{id}/history", s.handleServiceHistory)

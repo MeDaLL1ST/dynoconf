@@ -1,7 +1,7 @@
-// Package tgbot is an optional Telegram bot for viewing and editing
-// configuration from chat. Only allow-listed Telegram user IDs may use it.
-// Edits go through the same store + event fan-out as the UI, so connected gRPC
-// clients update in real time.
+// Package tgbot provides an optional Telegram integration that is fully managed
+// from the web UI (settings stored in the DB): change notifications and an
+// allow-listed bot to view/edit config. The Manager can be reconfigured at
+// runtime — enabling/disabling and re-tokening without a restart.
 package tgbot
 
 import (
@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dynoconf/dynoconf/internal/audit"
@@ -21,39 +22,115 @@ import (
 	"github.com/dynoconf/dynoconf/internal/store"
 )
 
-// Bot polls Telegram and handles config commands.
-type Bot struct {
-	token   string
-	allowed map[int64]bool
+// Settings is the runtime Telegram configuration.
+type Settings struct {
+	Enabled  bool
+	BotToken string
+	ChatID   string
+	AdminIDs []int64
+}
+
+// Manager owns the Telegram lifecycle and implements the audit notifier hook.
+type Manager struct {
 	contour string
 	store   *store.Store
 	broker  *events.Broker
-	audit   *audit.Logger
 	log     *slog.Logger
 	http    *http.Client
+
+	rootCtx context.Context
+	auditor *audit.Logger
+
+	mu     sync.Mutex
+	cur    Settings
+	cancel context.CancelFunc // cancels the running bot loop, if any
 }
 
-// New builds a bot. Returns nil if token or the allow-list is empty (disabled).
-func New(token string, allowedIDs []int64, contour string, st *store.Store, broker *events.Broker, au *audit.Logger, log *slog.Logger) *Bot {
-	if token == "" || len(allowedIDs) == 0 {
-		return nil
-	}
-	allowed := make(map[int64]bool, len(allowedIDs))
-	for _, id := range allowedIDs {
-		allowed[id] = true
-	}
-	return &Bot{
-		token: token, allowed: allowed, contour: contour,
-		store: st, broker: broker, audit: au, log: log,
+// NewManager builds a manager. Call SetAudit, then Start, then Configure.
+func NewManager(contour string, st *store.Store, broker *events.Broker, log *slog.Logger) *Manager {
+	return &Manager{
+		contour: contour, store: st, broker: broker, log: log,
 		http: &http.Client{Timeout: 70 * time.Second},
 	}
 }
 
+// SetAudit wires the audit logger used to record bot-driven edits.
+func (m *Manager) SetAudit(a *audit.Logger) { m.auditor = a }
+
+// Start records the root context used for bot goroutines.
+func (m *Manager) Start(ctx context.Context) { m.rootCtx = ctx }
+
+// Current returns the active settings.
+func (m *Manager) Current() Settings {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.cur
+}
+
+// Configure applies new settings and (re)starts or stops the bot loop.
+func (m *Manager) Configure(s Settings) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cur = s
+
+	// Stop any running loop.
+	if m.cancel != nil {
+		m.cancel()
+		m.cancel = nil
+	}
+	// Start a fresh loop only if enabled with a token and at least one admin.
+	if s.Enabled && s.BotToken != "" && len(s.AdminIDs) > 0 && m.rootCtx != nil {
+		ctx, cancel := context.WithCancel(m.rootCtx)
+		m.cancel = cancel
+		token := s.BotToken
+		allowed := map[int64]bool{}
+		for _, id := range s.AdminIDs {
+			allowed[id] = true
+		}
+		go m.runBot(ctx, token, allowed)
+		m.log.Info("telegram bot enabled", "contour", m.contour, "admins", len(allowed))
+	} else {
+		m.log.Info("telegram bot disabled", "contour", m.contour)
+	}
+}
+
+// --- notifications (audit notifier hook) ---
+
+var notifyActions = map[string]bool{
+	"variable.upsert": true, "variable.delete": true, "variable.rollback": true,
+	"service.create": true, "service.delete": true,
+	"permission.grant": true, "permission.revoke": true, "config.import": true,
+}
+
+// OnAction posts a change notification to the configured chat (best-effort).
+func (m *Manager) OnAction(actor, action, target string, details map[string]any) {
+	m.mu.Lock()
+	s := m.cur
+	m.mu.Unlock()
+	if !s.Enabled || s.BotToken == "" || s.ChatID == "" || !notifyActions[action] {
+		return
+	}
+	msg := fmt.Sprintf("🔧 dynoconf [%s]\n%s by %s\n%s", m.contour, action, actor, target)
+	if d := formatDetails(details); d != "" {
+		msg += "\n" + d
+	}
+	go m.send(s.BotToken, s.ChatID, msg)
+}
+
+// SendTest posts a test message with the given (unsaved) settings.
+func (m *Manager) SendTest(token, chatID string) error {
+	if token == "" || chatID == "" {
+		return fmt.Errorf("bot token and chat id are required")
+	}
+	return m.sendErr(token, chatID, "✅ dynoconf ["+m.contour+"] test notification")
+}
+
+// --- bot loop ---
+
 type update struct {
 	UpdateID int64 `json:"update_id"`
 	Message  *struct {
-		MessageID int64 `json:"message_id"`
-		From      struct {
+		From struct {
 			ID       int64  `json:"id"`
 			Username string `json:"username"`
 		} `json:"from"`
@@ -64,17 +141,15 @@ type update struct {
 	} `json:"message"`
 }
 
-// Run long-polls Telegram until ctx is cancelled.
-func (b *Bot) Run(ctx context.Context) {
-	b.log.Info("telegram bot started", "contour", b.contour, "allowed_users", len(b.allowed))
+func (m *Manager) runBot(ctx context.Context, token string, allowed map[int64]bool) {
 	var offset int64
 	for ctx.Err() == nil {
-		ups, err := b.getUpdates(ctx, offset)
+		ups, err := m.getUpdates(ctx, token, offset)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
-			b.log.Warn("telegram getUpdates failed", "err", err)
+			m.log.Warn("telegram getUpdates failed", "err", err)
 			select {
 			case <-ctx.Done():
 				return
@@ -84,24 +159,22 @@ func (b *Bot) Run(ctx context.Context) {
 		}
 		for _, u := range ups {
 			offset = u.UpdateID + 1
-			if u.Message == nil || u.Message.Text == "" {
-				continue
+			if u.Message != nil && u.Message.Text != "" {
+				m.handle(ctx, token, allowed, u)
 			}
-			b.handle(ctx, u)
 		}
 	}
 }
 
-func (b *Bot) getUpdates(ctx context.Context, offset int64) ([]update, error) {
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates?timeout=60&offset=%d", b.token, offset)
+func (m *Manager) getUpdates(ctx context.Context, token string, offset int64) ([]update, error) {
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates?timeout=60&offset=%d", token, offset)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	resp, err := b.http.Do(req)
+	resp, err := m.http.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	var out struct {
-		OK     bool     `json:"ok"`
 		Result []update `json:"result"`
 	}
 	body, _ := io.ReadAll(resp.Body)
@@ -111,48 +184,47 @@ func (b *Bot) getUpdates(ctx context.Context, offset int64) ([]update, error) {
 	return out.Result, nil
 }
 
-func (b *Bot) handle(ctx context.Context, u update) {
+func (m *Manager) handle(ctx context.Context, token string, allowed map[int64]bool, u update) {
 	chatID := u.Message.Chat.ID
-	if !b.allowed[u.Message.From.ID] {
-		b.reply(chatID, "⛔ Not authorized. Your Telegram ID: "+strconv.FormatInt(u.Message.From.ID, 10))
+	if !allowed[u.Message.From.ID] {
+		m.reply(token, chatID, "⛔ Not authorized. Your Telegram ID: "+strconv.FormatInt(u.Message.From.ID, 10))
 		return
 	}
 	actor := "telegram:" + u.Message.From.Username
 	if u.Message.From.Username == "" {
 		actor = "telegram:" + strconv.FormatInt(u.Message.From.ID, 10)
 	}
-
 	fields := strings.Fields(u.Message.Text)
 	cmd := strings.ToLower(fields[0])
-	if i := strings.IndexByte(cmd, '@'); i >= 0 { // strip /cmd@BotName
+	if i := strings.IndexByte(cmd, '@'); i >= 0 {
 		cmd = cmd[:i]
 	}
 	args := fields[1:]
 
 	switch cmd {
 	case "/start", "/help":
-		b.reply(chatID, helpText(b.contour))
+		m.reply(token, chatID, helpText(m.contour))
 	case "/services":
-		b.cmdServices(ctx, chatID)
+		m.cmdServices(ctx, token, chatID)
 	case "/list":
-		b.cmdList(ctx, chatID, args)
+		m.cmdList(ctx, token, chatID, args)
 	case "/get":
-		b.cmdGet(ctx, chatID, args)
+		m.cmdGet(ctx, token, chatID, args)
 	case "/set":
-		b.cmdSet(ctx, chatID, args, actor)
+		m.cmdSet(ctx, token, chatID, args, actor)
 	default:
-		b.reply(chatID, "Unknown command. /help")
+		m.reply(token, chatID, "Unknown command. /help")
 	}
 }
 
-func (b *Bot) cmdServices(ctx context.Context, chatID int64) {
-	svcs, err := b.store.ListServices(ctx)
+func (m *Manager) cmdServices(ctx context.Context, token string, chatID int64) {
+	svcs, err := m.store.ListServices(ctx)
 	if err != nil {
-		b.reply(chatID, "error: "+err.Error())
+		m.reply(token, chatID, "error: "+err.Error())
 		return
 	}
 	if len(svcs) == 0 {
-		b.reply(chatID, "No services.")
+		m.reply(token, chatID, "No services.")
 		return
 	}
 	var sb strings.Builder
@@ -160,26 +232,26 @@ func (b *Bot) cmdServices(ctx context.Context, chatID int64) {
 	for _, s := range svcs {
 		fmt.Fprintf(&sb, "• %s — %s\n", s.Key, s.Name)
 	}
-	b.reply(chatID, sb.String())
+	m.reply(token, chatID, sb.String())
 }
 
-func (b *Bot) cmdList(ctx context.Context, chatID int64, args []string) {
+func (m *Manager) cmdList(ctx context.Context, token string, chatID int64, args []string) {
 	if len(args) < 1 {
-		b.reply(chatID, "usage: /list <service_key>")
+		m.reply(token, chatID, "usage: /list <service_key>")
 		return
 	}
-	svc, err := b.store.GetServiceByKey(ctx, args[0])
+	svc, err := m.store.GetServiceByKey(ctx, args[0])
 	if err != nil {
-		b.reply(chatID, "service not found")
+		m.reply(token, chatID, "service not found")
 		return
 	}
-	vars, err := b.store.ListVariables(ctx, svc.ID)
+	vars, err := m.store.ListVariables(ctx, svc.ID)
 	if err != nil {
-		b.reply(chatID, "error: "+err.Error())
+		m.reply(token, chatID, "error: "+err.Error())
 		return
 	}
 	if len(vars) == 0 {
-		b.reply(chatID, "(no variables)")
+		m.reply(token, chatID, "(no variables)")
 		return
 	}
 	var sb strings.Builder
@@ -187,72 +259,86 @@ func (b *Bot) cmdList(ctx context.Context, chatID int64, args []string) {
 	for _, v := range vars {
 		fmt.Fprintf(&sb, "%s = %s  (v%d)\n", v.Key, v.Value, v.Version)
 	}
-	b.reply(chatID, sb.String())
+	m.reply(token, chatID, sb.String())
 }
 
-func (b *Bot) cmdGet(ctx context.Context, chatID int64, args []string) {
+func (m *Manager) cmdGet(ctx context.Context, token string, chatID int64, args []string) {
 	if len(args) < 2 {
-		b.reply(chatID, "usage: /get <service_key> <KEY>")
+		m.reply(token, chatID, "usage: /get <service_key> <KEY>")
 		return
 	}
-	svc, err := b.store.GetServiceByKey(ctx, args[0])
+	svc, err := m.store.GetServiceByKey(ctx, args[0])
 	if err != nil {
-		b.reply(chatID, "service not found")
+		m.reply(token, chatID, "service not found")
 		return
 	}
-	vars, _ := b.store.ListVariables(ctx, svc.ID)
+	vars, _ := m.store.ListVariables(ctx, svc.ID)
 	for _, v := range vars {
 		if v.Key == args[1] {
-			b.reply(chatID, fmt.Sprintf("%s = %s (v%d, by %s)", v.Key, v.Value, v.Version, v.UpdatedBy))
+			m.reply(token, chatID, fmt.Sprintf("%s = %s (v%d, by %s)", v.Key, v.Value, v.Version, v.UpdatedBy))
 			return
 		}
 	}
-	b.reply(chatID, "variable not found")
+	m.reply(token, chatID, "variable not found")
 }
 
-func (b *Bot) cmdSet(ctx context.Context, chatID int64, args []string, actor string) {
+func (m *Manager) cmdSet(ctx context.Context, token string, chatID int64, args []string, actor string) {
 	if len(args) < 3 {
-		b.reply(chatID, "usage: /set <service_key> <KEY> <value>")
+		m.reply(token, chatID, "usage: /set <service_key> <KEY> <value>")
 		return
 	}
-	svc, err := b.store.GetServiceByKey(ctx, args[0])
+	svc, err := m.store.GetServiceByKey(ctx, args[0])
 	if err != nil {
-		b.reply(chatID, "service not found")
+		m.reply(token, chatID, "service not found")
 		return
 	}
 	key := args[1]
 	value := strings.Join(args[2:], " ")
-	change, err := b.store.UpsertVariable(ctx, svc.ID, key, value, actor)
+	change, err := m.store.UpsertVariable(ctx, svc.ID, key, value, actor)
 	if err != nil {
-		b.reply(chatID, "error: "+err.Error())
+		m.reply(token, chatID, "error: "+err.Error())
 		return
 	}
-	// Fan out to gRPC clients + UI, and audit (which also notifies).
-	_ = b.broker.Publish(ctx, b.store.Exec, events.Event{
+	_ = m.broker.Publish(ctx, m.store.Exec, events.Event{
 		Kind: events.KindVar, ServiceID: svc.ID, ServiceKey: svc.Key,
 		ChangeType: events.Upsert, Key: key, Value: value, Version: change.Variable.Version,
 	})
-	b.audit.Record(ctx, actor, audit.VariableUpsert, "service:"+svc.Key+"/"+key,
-		map[string]any{"version": change.Variable.Version, "via": "telegram"})
-	b.reply(chatID, fmt.Sprintf("✅ %s/%s = %s (v%d)", svc.Key, key, value, change.Variable.Version))
+	if m.auditor != nil {
+		m.auditor.Record(ctx, actor, audit.VariableUpsert, "service:"+svc.Key+"/"+key,
+			map[string]any{"version": change.Variable.Version, "via": "telegram"})
+	}
+	m.reply(token, chatID, fmt.Sprintf("✅ %s/%s = %s (v%d)", svc.Key, key, value, change.Variable.Version))
 }
 
-func (b *Bot) reply(chatID int64, text string) {
+// --- low-level telegram ---
+
+func (m *Manager) reply(token string, chatID int64, text string) {
+	_ = m.sendErr(token, strconv.FormatInt(chatID, 10), text)
+}
+
+func (m *Manager) send(token, chatID, text string) { _ = m.sendErr(token, chatID, text) }
+
+func (m *Manager) sendErr(token, chatID, text string) error {
 	body, _ := json.Marshal(map[string]any{"chat_id": chatID, "text": text})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		"https://api.telegram.org/bot"+b.token+"/sendMessage", bytes.NewReader(body))
+		"https://api.telegram.org/bot"+token+"/sendMessage", bytes.NewReader(body))
 	if err != nil {
-		return
+		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := b.http.Do(req)
+	resp, err := m.http.Do(req)
 	if err != nil {
-		b.log.Warn("telegram reply failed", "err", err)
-		return
+		m.log.Warn("telegram send failed", "err", err)
+		return err
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("telegram API %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+	return nil
 }
 
 func helpText(contour string) string {
@@ -261,4 +347,15 @@ func helpText(contour string) string {
 		"/list <service_key> — list variables\n" +
 		"/get <service_key> <KEY> — show a value\n" +
 		"/set <service_key> <KEY> <value> — set a value"
+}
+
+func formatDetails(details map[string]any) string {
+	if len(details) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for k, v := range details {
+		fmt.Fprintf(&b, "%s: %v\n", k, v)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }

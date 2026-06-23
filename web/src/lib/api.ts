@@ -177,6 +177,20 @@ export const api = {
   addFavorite: (id: number) => req<void>("POST", `/api/services/${id}/favorite`),
   removeFavorite: (id: number) => req<void>("DELETE", `/api/services/${id}/favorite`),
 
+  getTelegram: () =>
+    req<{ enabled: boolean; chat_id: string; admin_ids: number[]; has_token: boolean }>(
+      "GET",
+      "/api/settings/telegram"
+    ),
+  setTelegram: (b: {
+    enabled: boolean;
+    bot_token: string;
+    chat_id: string;
+    admin_ids: number[];
+  }) => req<void>("PUT", "/api/settings/telegram", b),
+  testTelegram: (b: { bot_token: string; chat_id: string }) =>
+    req<void>("POST", "/api/settings/telegram/test", b),
+
   listTokens: () => req<ApiToken[]>("GET", "/api/tokens"),
   createToken: (name: string) =>
     req<{ id: number; name: string; token: string; created_at: string }>(

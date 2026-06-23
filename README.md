@@ -157,28 +157,72 @@ rpc Subscribe(SubscribeRequest) returns (stream ConfigEvent);
 is **not validated** — the gRPC port is network-restricted (ClusterIP, never
 exposed outside the cluster).
 
-## REST API (UI, OIDC-session protected)
+## Sidecar agent (for services without an SDK)
 
-| Method/Path | Purpose | Authz |
-|---|---|---|
-| `GET /api/me` | current user | session |
-| `GET/POST /api/services` | list / create | list: own; create: admin |
-| `GET/DELETE /api/services/{id}` | get / delete | viewer / admin |
-| `GET /api/services/{id}/connection-info` | key + snippets | viewer |
-| `GET /api/services/{id}/connections` | live active gRPC count | viewer |
-| `GET /api/services/{id}/variables` | list variables | viewer |
-| `PUT/DELETE /api/services/{id}/variables/{key}` | upsert / delete | editor |
-| `GET /api/services/{id}/history` | service history | viewer |
-| `GET /api/services/{id}/variables/{key}/history` | variable history | viewer |
-| `POST /api/services/{id}/variables/{key}/rollback` | rollback to a version | editor |
-| `GET /api/audit` | global audit log | admin |
-| `GET /api/users`, `PUT /api/users/{id}/role` | users / roles | admin |
-| `GET/PUT /api/services/{id}/permissions`, `DELETE …/{userID}` | per-service access | admin |
-| `GET /api/events` | SSE live feed (variables + connection counts) | session |
-| `GET /healthz`, `GET /readyz` | liveness / readiness | none |
+Any language can consume dynoconf via the sidecar — it connects over gRPC,
+renders the service's variables to a file, re-renders on every change, and can
+run a reload hook. Image: `medall1st/dynoconf-agent`.
 
-Every mutating endpoint enforces RBAC server-side — the UI hiding buttons is
-cosmetic only.
+```yaml
+# Run as a sidecar container next to your app:
+- name: dynoconf-agent
+  image: medall1st/dynoconf-agent:latest
+  env:
+    - name: CONFIG_SERVICE_ADDR
+      value: "dynoconf-grpc.dynoconf.svc.cluster.local:9090"
+    - name: CONFIG_SERVICE_KEY
+      value: "my-service"
+    - name: AGENT_OUTPUT_FILE
+      value: "/config/app.env"      # written as KEY="value" lines
+    - name: AGENT_FORMAT
+      value: "env"                  # env | json
+    - name: AGENT_ON_CHANGE
+      value: "kill -HUP 1"          # optional: run on every change (reload)
+  volumeMounts:
+    - { name: config, mountPath: /config }
+```
+
+Your app reads `/config/app.env` at start and re-reads (or reloads) on the
+`AGENT_ON_CHANGE` signal. Env vars on the agent container (UPPER_SNAKE_CASE) act
+as defaults, exactly like the SDK clients.
+
+## CLI (`dynoconf-cli`) for CI/scripts
+
+Authenticates with a personal API token (UI → Admin → API tokens).
+
+```bash
+export DYNOCONF_URL=https://cfg.dev.example.com
+export DYNOCONF_TOKEN=dyn_xxx
+
+dynoconf-cli services                       # list service keys you can see
+dynoconf-cli get my-service                 # print all KEY=VALUE
+dynoconf-cli get my-service LOG_LEVEL       # print one value
+dynoconf-cli set my-service LOG_LEVEL debug # set a value
+dynoconf-cli export > backup.json           # full config (admin)
+dynoconf-cli import backup.json             # merge import (admin)
+```
+
+Build it with `make build-tools` (produces `bin/dynoconf-cli` and
+`bin/dynoconf-agent`).
+
+## Telegram (optional, configured in the UI)
+
+Everything is managed from **Admin → Telegram integration** and stored in the
+database — there are no Telegram env vars. Untick **Enabled** and Save to turn it
+off completely.
+
+1. Create a bot with [@BotFather](https://t.me/BotFather) and copy its token.
+2. In **Admin → Telegram integration**: paste the token, set the **Chat ID**
+   (where notifications are posted), list the **admin Telegram user IDs** allowed
+   to edit via the bot, tick **Enabled**, and **Save**. Use **Send test** to
+   verify.
+3. Notifications: every change (variables, services, permissions, import) is
+   posted to the chat — who, what, where.
+4. Bot commands (allow-listed users only):
+   `/services`, `/list <key>`, `/get <key> <KEY>`, `/set <key> <KEY> <value>` —
+   edits fan out to connected apps in real time, just like the UI.
+
+The bot starts/stops live when you save settings — no restart needed.
 
 ## Versioning & rollback
 
@@ -201,15 +245,12 @@ numbers are monotonic per `(service, key)` and **survive delete/recreate**.
 | `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` / `OIDC_REDIRECT_URL` | yes* | *unless `DEV_AUTH_EMAIL` is set |
 | `COOKIE_SECURE` | no (`false`) | set `true` behind HTTPS |
 | `AUDIT_MAX_ENTRIES` | no (`5000`) | audit log is pruned hourly to the newest N rows |
-| `TELEGRAM_BOT_TOKEN` | no | enables change notifications (with chat id) and the bot (with admin ids) |
-| `TELEGRAM_CHAT_ID` | no | chat to post change notifications to |
-| `TELEGRAM_ADMIN_IDS` | no | comma-separated Telegram user ids allowed to edit via the bot |
 | `DEV_AUTH_EMAIL` | no | **dev only**: bypass OIDC, log in as this email |
 
-Extras: cross-service **search**, service **tags** + **favorites**, **bulk edit**
-(paste KEY=VALUE), per-client **connection detail** (replica + peer + since),
-**Telegram** notifications/bot, **API tokens** for the `dynoconf-cli`, and a
-language-agnostic **sidecar agent** (`cmd/agent`) that renders config to a file.
+Extras (all in the UI): cross-service **search**, service **tags** + **favorites**,
+**bulk edit** (paste KEY=VALUE), per-client **connection detail** (replica + peer
++ since), **Telegram** notifications/bot (Admin → Telegram, stored in DB),
+**API tokens** for the `dynoconf-cli`, and a language-agnostic **sidecar agent**.
 
 Login sessions are persistent encrypted cookies (30 days), so reopening a
 tab/browser keeps you signed in. The audit log is capped by `AUDIT_MAX_ENTRIES`
@@ -227,9 +268,9 @@ A prebuilt multi-arch image (linux/amd64 + linux/arm64) is published at
 Go binary → distroless runtime):
 
 ```bash
-docker build -t medall1st/dynoconf:1.2.0 .
+docker build -t medall1st/dynoconf:1.3.0 .
 # multi-arch:
-docker buildx build --platform linux/amd64,linux/arm64 -t medall1st/dynoconf:1.2.0 --push .
+docker buildx build --platform linux/amd64,linux/arm64 -t medall1st/dynoconf:1.3.0 --push .
 ```
 
 Migrations run automatically on startup (idempotent), or apply them explicitly:

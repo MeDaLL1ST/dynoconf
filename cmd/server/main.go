@@ -28,7 +28,6 @@ import (
 	pb "github.com/dynoconf/dynoconf/internal/grpcserver/configpb"
 	"github.com/dynoconf/dynoconf/internal/httpserver"
 	"github.com/dynoconf/dynoconf/internal/migrate"
-	"github.com/dynoconf/dynoconf/internal/notify"
 	"github.com/dynoconf/dynoconf/internal/store"
 	"github.com/dynoconf/dynoconf/internal/tgbot"
 	"github.com/dynoconf/dynoconf/web"
@@ -74,26 +73,30 @@ func run(log *slog.Logger) error {
 	}
 	defer st.Close()
 
-	// Telegram notifications on changes (best-effort; no-op if unconfigured).
-	notifier := notify.NewTelegram(cfg.TelegramBotToken, cfg.TelegramChatID, cfg.ContourName, log)
-	auditor := audit.New(st, log, notifier)
-
 	// Events broker: a dedicated connection for LISTEN.
 	broker := events.NewBroker(func(ctx context.Context) (*pgx.Conn, error) {
 		return pgx.Connect(ctx, cfg.DatabaseURL)
 	}, log)
 	go broker.Run(rootCtx)
 
+	// Telegram integration, fully configured from the web UI (settings in DB).
+	tgManager := tgbot.NewManager(cfg.ContourName, st, broker, log)
+	auditor := audit.New(st, log, tgManager) // manager is the change-notifier
+	tgManager.SetAudit(auditor)
+	tgManager.Start(rootCtx)
+	if ts, err := st.GetTelegramSettings(rootCtx); err != nil {
+		log.Warn("load telegram settings failed", "err", err)
+	} else {
+		tgManager.Configure(tgbot.Settings{
+			Enabled: ts.Enabled, BotToken: ts.BotToken, ChatID: ts.ChatID, AdminIDs: ts.AdminIDs,
+		})
+	}
+
 	replicaID := makeReplicaID()
 	log.Info("starting", "contour", cfg.ContourName, "replica", replicaID)
 
 	tracker := grpcserver.NewConnTracker(replicaID, st, broker, log)
 	go tracker.Run(rootCtx)
-
-	// Optional Telegram bot for viewing/editing config from chat.
-	if bot := tgbot.New(cfg.TelegramBotToken, cfg.TelegramAdminIDs, cfg.ContourName, st, broker, auditor, log); bot != nil {
-		go bot.Run(rootCtx)
-	}
 
 	// Cap the audit log so it can't fill the database.
 	go runAuditPruner(rootCtx, st, cfg.AuditMaxEntries, log)
@@ -123,7 +126,7 @@ func run(log *slog.Logger) error {
 	}
 	httpSrv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpserver.New(cfg, st, authn, broker, auditor, staticFS, log).Handler(),
+		Handler:           httpserver.New(cfg, st, authn, broker, auditor, tgManager, staticFS, log).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	httpErr := make(chan error, 1)

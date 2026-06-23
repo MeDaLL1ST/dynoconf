@@ -21,7 +21,7 @@ services:
       retries: 20
 
   dynoconf:
-    image: medall1st/dynoconf:1.2.0
+    image: medall1st/dynoconf:1.3.0
     # `build: .` builds locally and tags it as the image above. Remove `build`
     # (or run `docker compose pull`) to use the published Docker Hub image.
     build: .
