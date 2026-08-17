@@ -11,7 +11,7 @@ require (
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.43.0
 	golang.org/x/oauth2 v0.36.0
 	google.golang.org/grpc v1.81.1
-	google.golang.org/protobuf v1.36.11
+	google.golang.org/protobuf v1.36.12
 )
 
 require (
