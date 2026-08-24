@@ -11,7 +11,7 @@ RUN npm run build
 # --- Stage 2: build the Go binary with the embedded frontend ---
 # Runs on the build host's arch and cross-compiles to the target via GOOS/GOARCH,
 # so multi-arch builds don't need QEMU emulation for the Go toolchain.
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS backend
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS backend
 ARG TARGETOS
 ARG TARGETARCH
 WORKDIR /src
