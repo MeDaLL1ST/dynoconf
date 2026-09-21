@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # --- Stage 1: build the frontend (arch-independent, runs on the build host) ---
-FROM --platform=$BUILDPLATFORM node:20-alpine AS frontend
+FROM --platform=$BUILDPLATFORM node:25-alpine AS frontend
 WORKDIR /web
 COPY web/package.json web/package-lock.json* ./
 RUN npm install
